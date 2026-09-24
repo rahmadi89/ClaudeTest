@@ -482,6 +482,8 @@ $RECYCLE.BIN/
 *.swp
 
 ## ---- ATM Monitor ----
+# The VS template above ignores every Logs/ folder; this one is source code.
+!src/Agent/AtmMonitor.Agent/Logs/
 *.db
 *.db-shm
 *.db-wal
