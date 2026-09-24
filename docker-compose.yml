@@ -1,0 +1,80 @@
+# Local / demo stack: PostgreSQL + API (serving the React console) + three simulated ATM agents.
+#   docker compose up --build
+#   open http://localhost:8080  (admin / value of ADMIN_PASSWORD below)
+#
+# This file is for evaluation. Production guidance: docs/DEPLOYMENT.md.
+
+x-agent: &agent
+  build:
+    context: .
+    dockerfile: deploy/docker/agent.Dockerfile
+  restart: unless-stopped
+  depends_on:
+    api:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atm_monitor
+      POSTGRES_USER: atm_monitor
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local-dev-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atm_monitor -d atm_monitor"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/server.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      ConnectionStrings__Default: "Host=db;Database=atm_monitor;Username=atm_monitor;Password=${DB_PASSWORD:-local-dev-only}"
+      Database__Provider: Postgres
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:-local-demo-signing-key-change-me-0123456789}
+      Bootstrap__AdminPassword: ${ADMIN_PASSWORD:-ChangeMe!12345}
+      Bootstrap__EnrollmentToken: ${ENROLLMENT_TOKEN:-demo-enrollment-token-local-only}
+      Monitoring__OfflineAfterSeconds: "60"
+
+  agent-1:
+    <<: *agent
+    environment: &agent-env
+      Agent__ServerUrl: http://api:8080
+      Agent__AllowInsecureTransport: "true"
+      Agent__EnrollmentToken: ${ENROLLMENT_TOKEN:-demo-enrollment-token-local-only}
+      Agent__TerminalId: ATM-NYC-0001
+      Agent__StatusIntervalSeconds: "15"
+      Agent__HostCheck__Host: api
+      Agent__HostCheck__Port: "8080"
+    volumes: [agent1:/data]
+
+  agent-2:
+    <<: *agent
+    environment:
+      <<: *agent-env
+      Agent__TerminalId: ATM-NYC-0002
+    volumes: [agent2:/data]
+
+  agent-3:
+    <<: *agent
+    environment:
+      <<: *agent-env
+      Agent__TerminalId: ATM-BOS-0001
+    volumes: [agent3:/data]
+
+volumes:
+  pgdata:
+  agent1:
+  agent2:
+  agent3:

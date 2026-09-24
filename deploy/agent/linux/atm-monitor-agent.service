@@ -1,0 +1,36 @@
+# systemd unit for the ATM Monitor Agent on Linux-based terminals / kiosks.
+# Install: copy the published agent to /opt/atm-monitor-agent, config to /etc/atm-monitor-agent/appsettings.json (mode 0640),
+# then: systemctl daemon-reload && systemctl enable --now atm-monitor-agent
+[Unit]
+Description=ATM Monitor Agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+User=atm-monitor
+Group=atm-monitor
+WorkingDirectory=/opt/atm-monitor-agent
+ExecStart=/opt/atm-monitor-agent/AtmMonitor.Agent
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=Agent__DataDirectory=/var/lib/atm-monitor-agent
+# Machine-specific configuration, layered over appsettings.json in the install dir (env vars still win).
+Environment=ATM_AGENT_CONFIG=/etc/atm-monitor-agent/appsettings.json
+Restart=on-failure
+RestartSec=10
+StateDirectory=atm-monitor-agent
+StateDirectoryMode=0700
+
+# Hardening. Note: with NoNewPrivileges the RebootMachine command needs a polkit rule allowing this user
+# to call org.freedesktop.login1.reboot (see docs/AGENT.md), or leave Agent:AllowReboot=false.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/atm-monitor-agent
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

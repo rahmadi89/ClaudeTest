@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  backend:
+    name: Backend (.NET build, tests, migrations)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore AtmMonitor.sln
+      - name: Build (warnings are errors)
+        run: dotnet build AtmMonitor.sln -c Release --no-restore
+      - name: Test
+        run: dotnet test AtmMonitor.sln -c Release --no-build --logger "trx;LogFileName=results.trx" --collect:"XPlat Code Coverage"
+      - name: Migrations are in sync with the model
+        run: |
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes -p src/Server/AtmMonitor.Infrastructure -s src/Server/AtmMonitor.Infrastructure
+      - name: Vulnerable package check
+        run: |
+          dotnet list AtmMonitor.sln package --vulnerable --include-transitive 2>&1 | tee vuln.txt
+          ! grep -q "has the following vulnerable packages" vuln.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/TestResults/**"
+
+  frontend:
+    name: Frontend (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  agent-package:
+    name: Agent package (win-x64, linux-x64)
+    runs-on: ubuntu-latest
+    needs: backend
+    strategy:
+      matrix:
+        rid: [win-x64, linux-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Publish self-contained single file
+        run: >
+          dotnet publish src/Agent/AtmMonitor.Agent -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/${{ matrix.rid }}
+      - name: Add installer scripts
+        run: |
+          if [ "${{ matrix.rid }}" = "win-x64" ]; then cp deploy/agent/windows/*.ps1 out/${{ matrix.rid }}/; else cp deploy/agent/linux/* out/${{ matrix.rid }}/; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atm-monitor-agent-${{ matrix.rid }}
+          path: out/${{ matrix.rid }}
+
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/server.Dockerfile
+          push: false
+          tags: atm-monitor-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build simulator agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/agent.Dockerfile
+          push: false
+          tags: atm-monitor-agent:${{ github.sha }}
